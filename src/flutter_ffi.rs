@@ -926,58 +926,28 @@ pub fn main_get_option_sync(key: String) -> SyncReturn<String> {
 pub fn main_get_error() -> String {
     get_error()
 }
-//修复隐藏托盘图标功能：
+
+// Send IPC message to tray process to hide/show icon dynamically
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn restart_tray() {
-    use hbb_common::config::Config;
+fn send_hide_tray_message(hide: bool) {
+    use crate::ipc::Data;
     
-    // Kill existing tray process
-    let app_name = crate::get_app_name();
+    log::info!("Sending HideTray message to tray process: {}", hide);
     
-    #[cfg(target_os = "windows")]
-    {
-        let app_exe_name = format!("{}.exe", app_name);
-        let tray_pids = crate::platform::get_pids_of_process_with_args(&app_exe_name, &["--tray"]);
-        //添加隐藏托盘图标功能：
-        if !tray_pids.is_empty() {
-            log::info!("Killing {} tray processes for restart", tray_pids.len());
-            use sysinfo::{System, SystemExt, ProcessExt, Pid};
-            let s = System::new_all();
-            for pid in tray_pids {
-                if let Some(process) = s.process(pid) {
-                    process.kill();
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        match crate::ipc::connect(1000, "--tray").await {
+            Ok(mut conn) => {
+                if let Err(e) = conn.send(&Data::HideTray(hide)).await {
+                    log::error!("Failed to send HideTray message: {}", e);
+                } else {
+                    log::info!("Successfully sent HideTray message");
                 }
             }
-            std::thread::sleep(std::time::Duration::from_millis(500));
-        }
-    }
-    
-    #[cfg(not(target_os = "windows"))]
-    {
-        use sysinfo::{System, SystemExt, ProcessExt};
-        let mut system = System::new_all();
-        system.refresh_all();
-        
-        let name = app_name.to_lowercase();
-        for (pid, process) in system.processes() {
-            if process.name().to_lowercase() == name && process.cmd().iter().any(|arg| arg == "--tray") {
-                log::info!("Killing tray process {} for restart", pid);
-                process.kill();
+            Err(e) => {
+                log::error!("Failed to connect to tray process: {}", e);
             }
         }
-        std::thread::sleep(std::time::Duration::from_millis(500));
-    }
-    
-    // Start tray if hide-tray is not set
-    let hide_tray = Config::get_option(config::keys::OPTION_HIDE_TRAY);
-    if hide_tray != "Y" {
-        log::info!("Starting tray process");
-        if let Err(e) = crate::run_me(vec!["--tray"]) {
-            log::error!("Failed to restart tray: {}", e);
-        }
-    } else {
-        log::info!("Tray is hidden, not starting");
-    }
+    });
 }
 
 pub fn main_show_option(_key: String) -> SyncReturn<bool> {
@@ -1015,11 +985,12 @@ pub fn main_set_option(key: String, value: String) {
         crate::common::test_rendezvous_server();
     } else {
         set_option(key.clone(), value.clone());
-        //修复隐藏托盘图标功能：
+        // Send IPC message to tray to hide/show icon dynamically
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         if key.eq(config::keys::OPTION_HIDE_TRAY) {
-            std::thread::spawn(|| {
-                restart_tray();
+            let hide = value == "Y";
+            std::thread::spawn(move || {
+                send_hide_tray_message(hide);
             });
         }
     }
