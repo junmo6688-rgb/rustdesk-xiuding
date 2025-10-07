@@ -1,18 +1,42 @@
 use crate::client::translate;
+#[cfg(windows)]
 use crate::ipc::Data;
+#[cfg(windows)]
 use hbb_common::tokio;
 use hbb_common::{allow_err, log};
 use std::sync::{Arc, Mutex};
 #[cfg(windows)]
 use std::time::Duration;
+#[cfg(windows)]
 use hbb_common::futures::StreamExt;
 
 pub fn start_tray() {
-    // 检查 hide-tray 配置，如果启用则不启动托盘图标
-    if crate::ui_interface::get_builtin_option(hbb_common::config::keys::OPTION_HIDE_TRAY) == "Y" {
+    // 检查是否带 --tray 参数
+    let has_tray_arg = std::env::args().any(|arg| arg == "--tray");
+    
+    // 获取配置项
+    let hide_tray_option = crate::ui_interface::get_builtin_option(hbb_common::config::keys::OPTION_HIDE_TRAY);
+    
+    // 优先级顺序：
+    // 1. 有启动参数 --tray：忽略配置，强制显示
+    // 2. 无启动参数，有配置：参照配置（"Y" 不显示，其他显示）
+    // 3. 无启动参数，无配置：默认显示
+    let should_show_tray = if has_tray_arg {
+        // 优先级 1：带参数，强制显示
+        true
+    } else if !hide_tray_option.is_empty() {
+        // 优先级 2：无参数但有配置，参照配置
+        hide_tray_option != "Y"
+    } else {
+        // 优先级 3：无参数无配置，默认显示
+        true
+    };
+    
+    if !should_show_tray {
+        log::info!("Tray is disabled by config: hide_tray_option='{}'", hide_tray_option);
         #[cfg(target_os = "macos")]
         {
-            // macOS 需要保持线程运行以维持应用状态
+            // macOS 需要保持进程运行
             loop {
                 std::thread::sleep(std::time::Duration::from_secs(1));
             }
@@ -86,8 +110,6 @@ fn make_tray() -> hbb_common::ResultType<()> {
     let tray_channel = TrayEvent::receiver();
     #[cfg(windows)]
     let (ipc_sender, ipc_receiver) = std::sync::mpsc::channel::<Data>();
-    #[cfg(not(windows))]
-    let (ipc_sender, ipc_receiver) = std::sync::mpsc::channel::<Data>();
 
     let open_func = move || {
         if cfg!(not(feature = "flutter")) {
@@ -114,11 +136,13 @@ fn make_tray() -> hbb_common::ResultType<()> {
             }
         }
     };
-
-    let ipc_sender_for_tray = ipc_sender.clone();
-    std::thread::spawn(move || {
-        start_ipc_listener(ipc_sender_for_tray);
-    });
+    // 定义托盘图标的 IPC 监听器
+    #[cfg(windows)]{
+        let ipc_sender_for_tray = ipc_sender.clone();
+        std::thread::spawn(move || {
+            start_ipc_listener(ipc_sender_for_tray);
+        });
+    }
     #[cfg(windows)]
     std::thread::spawn(move || {
         start_query_session_count(ipc_sender.clone());
@@ -200,9 +224,9 @@ fn make_tray() -> hbb_common::ResultType<()> {
             }
         }
 
+        #[cfg(windows)]
         if let Ok(data) = ipc_receiver.try_recv() {
             match data {
-                #[cfg(windows)]
                 Data::ControlledSessionCount(count) => {
                     _tray_icon
                         .lock()
@@ -210,6 +234,7 @@ fn make_tray() -> hbb_common::ResultType<()> {
                         .as_mut()
                         .map(|t| t.set_tooltip(Some(tooltip(count))));
                 }
+                // 隐藏托盘图标
                 Data::HideTray(hide) => {
                     let mut tray_guard = _tray_icon.lock().unwrap();
                     if hide {
@@ -291,7 +316,7 @@ fn load_icon_from_asset() -> Option<image::DynamicImage> {
     None
 }
 
-/// 强制刷新 Windows 系统托盘区域，避免图标隐藏后出现幽灵图标
+/// 强制刷新 Windows 系统托盘区域,避免图标隐藏后出现幽灵图标
 /// 通过模拟鼠标移动触发托盘重绘
 #[cfg(windows)]
 fn refresh_tray_area() {
@@ -331,8 +356,8 @@ fn refresh_tray_area() {
             return;
         }
         
-        // 遍历托盘区域发送鼠标移动消息，每 5 像素一个采样点
-        // 触发 Windows 重绘托盘，移除幽灵图标
+        // 遍历托盘区域发送鼠标移动消息,每 5 像素一个采样点
+        // 触发 Windows 重绘托盘,移除幽灵图标
         let mut x = rect.left;
         while x < rect.right {
             let mut y = rect.top;
@@ -348,7 +373,7 @@ fn refresh_tray_area() {
     }
 }
 
-/// 将 UTF-8 字符串转换为 Windows API 所需的 UTF-16 宽字符，并添加 null 终止符
+/// 将 UTF-8 字符串转换为 Windows API 所需的 UTF-16 宽字符,并添加 null 终止符
 #[cfg(windows)]
 fn encode_wide(s: &str) -> Vec<u16> {
     use std::ffi::OsStr;
@@ -357,6 +382,7 @@ fn encode_wide(s: &str) -> Vec<u16> {
 }
 
 /// 启动 IPC 服务器接收控制消息并转发到事件循环
+#[cfg(windows)]
 fn start_ipc_listener(sender: std::sync::mpsc::Sender<Data>) {
     tokio::runtime::Runtime::new().unwrap().block_on(async {
         if let Ok(mut incoming) = crate::ipc::new_listener("hide-tray").await {
