@@ -42,7 +42,6 @@ pub fn core_main() -> Option<Vec<String>> {
     let mut _is_run_as_system = false;
     let mut _is_quick_support = false;
     let mut _is_flutter_invoke_new_connection = false;
-    let mut _is_silent_install = false;
     let mut no_server = false;
     let mut arg_exe = Default::default();
     for arg in std::env::args() {
@@ -116,11 +115,23 @@ pub fn core_main() -> Option<Vec<String>> {
     if _is_flutter_invoke_new_connection {
         return core_main_invoke_new_connection(std::env::args());
     }
+    // 检查文件名中是否包含 -silentinstall- 以触发静默安装（优先级高于普通安装）
+    #[cfg(windows)]
+    let auto_silent_install = args.is_empty() 
+        && arg_exe.to_lowercase().contains("-silentinstall-") 
+        && !config::is_disable_installation();
+    
+    #[cfg(windows)]
+    if auto_silent_install {
+        args.push("--silent-install".to_owned());
+    }
+    
     let click_setup = cfg!(windows) && args.is_empty() && crate::common::is_setup(&arg_exe);
     if click_setup && !config::is_disable_installation() {
         args.push("--install".to_owned());
         flutter_args.push("--install".to_string());
     }
+    
     if args.contains(&"--noinstall".to_string()) {
         args.clear();
     }
@@ -141,11 +152,6 @@ pub fn core_main() -> Option<Vec<String>> {
                 || config::LocalConfig::get_option("pre-elevate-service") == "Y"
                 || (!click_setup && crate::platform::is_elevated(None).unwrap_or(false)));
         crate::portable_service::client::set_quick_support(_is_quick_support);
-        
-        // 检测程序名中是否包含 -silent- 关键字来触发静默安装
-        _is_silent_install = !crate::platform::is_installed()
-            && args.is_empty()
-            && arg_exe.to_lowercase().contains("-silent-");
     }
     let mut log_name = "".to_owned();
     if args.len() > 0 && args[0].starts_with("--") {
@@ -178,51 +184,6 @@ pub fn core_main() -> Option<Vec<String>> {
     if !crate::platform::is_installed() && (_is_elevate || _is_run_as_system) {
         crate::platform::elevate_or_run_as_system(click_setup, _is_elevate, _is_run_as_system);
         return None;
-    }
-    
-    // 处理 -silent- 关键字触发的静默安装
-    #[cfg(windows)]
-    if _is_silent_install && !config::is_disable_installation() {
-        // 如果没有提权，先进行提权
-        if !crate::platform::is_elevated(None).unwrap_or(false) {
-            log::info!("Silent install triggered from exe name, elevating...");
-            if let Ok(true) = crate::platform::elevate("--silent-install") {
-                log::info!("Elevated successfully, will continue in elevated process");
-                return None;
-            } else {
-                log::error!("Failed to elevate for silent install");
-            }
-        } else {
-            // 已经提权，执行静默安装
-            log::info!("Running silent installation with elevated privileges");
-            #[cfg(not(windows))]
-            let options = "desktopicon startmenu";
-            #[cfg(windows)]
-            let options = "desktopicon startmenu printer";
-            
-            let res = crate::platform::install_me(options, "".to_owned(), true, false);
-            let text = match res {
-                Ok(_) => {
-                    log::info!("Silent installation completed successfully");
-                    translate("Installation Successful!".to_string())
-                },
-                Err(err) => {
-                    log::error!("Silent installation failed: {}", err);
-                    translate("Installation failed!".to_string())
-                }
-            };
-            
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
-            Toast::new(Toast::POWERSHELL_APP_ID)
-                .title(&config::APP_NAME.read().unwrap())
-                .text1(&text)
-                .sound(Some(Sound::Default))
-                .duration(Duration::Short)
-                .show()
-                .ok();
-            
-            return None;
-        }
     }
     #[cfg(all(feature = "flutter", feature = "plugin_framework"))]
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
