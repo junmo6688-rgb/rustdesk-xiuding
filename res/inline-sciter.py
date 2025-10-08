@@ -10,7 +10,7 @@ common_tis = open('src/ui/common.tis', encoding='UTF8').read()
 
 index = open('src/ui/index.html').read() \
     .replace('@import url(index.css);', open('src/ui/index.css').read()) \
-    .replace('include "index.tis";', open('src/ui/index.tis').read()) \
+    .replace('include "index.tis";', open('src/ui/index.tis', encoding='UTF8').read()) \
     .replace('include "msgbox.tis";', open('src/ui/msgbox.tis').read()) \
     .replace('include "ab.tis";', open('src/ui/ab.tis').read())
 
@@ -31,7 +31,7 @@ install = open('src/ui/install.html').read().replace('include "install.tis";', o
 
 cm = open('src/ui/cm.html').read() \
     .replace('@import url(cm.css);', open('src/ui/cm.css').read()) \
-    .replace('include "cm.tis";', open('src/ui/cm.tis').read())
+    .replace('include "cm.tis";', open('src/ui/cm.tis', encoding='UTF8').read())
 
 
 def compress(s):
