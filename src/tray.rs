@@ -11,42 +11,7 @@ use std::time::Duration;
 use hbb_common::futures::StreamExt;
 
 pub fn start_tray() {
-    // 检查是否带 --tray 参数
-    let has_tray_arg = std::env::args().any(|arg| arg == "--tray");
-    
-    // 获取配置项
-    let hide_tray_option = crate::ui_interface::get_builtin_option(hbb_common::config::keys::OPTION_HIDE_TRAY);
-    
-    // 优先级顺序：
-    // 1. 有启动参数 --tray：忽略配置，强制显示
-    // 2. 无启动参数，有配置：参照配置（"Y" 不显示，其他显示）
-    // 3. 无启动参数，无配置：默认显示
-    let should_show_tray = if has_tray_arg {
-        // 优先级 1：带参数，强制显示
-        true
-    } else if !hide_tray_option.is_empty() {
-        // 优先级 2：无参数但有配置，参照配置
-        hide_tray_option != "Y"
-    } else {
-        // 优先级 3：无参数无配置，默认显示
-        true
-    };
-    
-    if !should_show_tray {
-        log::info!("Tray is disabled by config: hide_tray_option='{}'", hide_tray_option);
-        #[cfg(target_os = "macos")]
-        {
-            // macOS 需要保持进程运行
-            loop {
-                std::thread::sleep(std::time::Duration::from_secs(1));
-            }
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            return;
-        }
-    }
-
+    // 总是创建托盘，若配置为隐藏则创建后立即销毁并刷新
     #[cfg(target_os = "linux")]
     crate::server::check_zombie();
 
@@ -137,22 +102,32 @@ fn make_tray() -> hbb_common::ResultType<()> {
         }
     };
     // 定义托盘图标的 IPC 监听器
-    #[cfg(windows)]{
+    #[cfg(windows)] {
         let ipc_sender_for_tray = ipc_sender.clone();
         std::thread::spawn(move || {
             start_ipc_listener(ipc_sender_for_tray);
         });
     }
     #[cfg(windows)]
-    std::thread::spawn(move || {
-        start_query_session_count(ipc_sender.clone());
-    });
+    {
+        let ipc_sender_for_count = ipc_sender.clone();
+        std::thread::spawn(move || {
+            start_query_session_count(ipc_sender_for_count);
+        });
+    }
     #[cfg(windows)]
     let mut last_click = std::time::Instant::now();
     #[cfg(target_os = "macos")]
     {
         use tao::platform::macos::EventLoopExtMacOS;
         event_loop.set_activation_policy(tao::platform::macos::ActivationPolicy::Accessory);
+    }
+    // 若配置为隐藏托盘，初始化后立即通过IPC通知事件循环隐藏托盘
+    let hide_tray = crate::ui_interface::get_option(hbb_common::config::keys::OPTION_HIDE_TRAY) == "Y";
+    #[cfg(windows)]
+    if hide_tray {
+        // 通过 IPC 向事件循环发送隐藏托盘指令
+        ipc_sender.send(Data::HideTray(true)).ok();
     }
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::WaitUntil(
@@ -174,7 +149,6 @@ fn make_tray() -> hbb_common::ResultType<()> {
                     log::error!("Failed to create tray icon: {}", err);
                 }
             };
-
             // We have to request a redraw here to have the icon actually show up.
             // Tao only exposes a redraw method on the Window so we use core-foundation directly.
             #[cfg(target_os = "macos")]

@@ -1024,12 +1024,11 @@ pub fn set_permanent_password(v: String) -> ResultType<()> {
     set_config("permanent-password", v)
 }
 
-#[cfg(feature = "flutter")]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn set_unlock_pin(v: String, translate: bool) -> ResultType<()> {
     let v = v.trim().to_owned();
     let min_len = 4;
-    let max_len = crate::ui_interface::max_encrypt_len();
+    let max_len = hbb_common::config::ENCRYPT_MAX_LEN;
     let len = v.chars().count();
     if !v.is_empty() {
         if len < min_len {
@@ -1051,7 +1050,6 @@ pub fn set_unlock_pin(v: String, translate: bool) -> ResultType<()> {
     set_config("unlock-pin", v)
 }
 
-#[cfg(feature = "flutter")]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn get_unlock_pin() -> String {
     if let Ok(Some(v)) = get_config("unlock-pin") {
